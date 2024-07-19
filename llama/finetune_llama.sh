@@ -1,4 +1,4 @@
-# This is a script for finetuning Megatron-LM llama2 model (default platform: 16 * H20 GPU, 2 nodes)
+# This is a script for finetuning Megatron-LM llama2 and llama3 model (default platform: 16 * H20 GPU, 2 nodes)
 # repository: https://github.com/NVIDIA/Megatron-LM.git
 # branch：git checkout 86850db
 # Setting the environment variables
@@ -6,12 +6,12 @@
 # Important arguments need to be set manually and checked:
 # TP: megatron tensor model parallel size
 # PP: megatron pipeline model parallel size
-# MODEL_SIZE: llama2 model type
-# DATA_PATH: dataset path for finetuning
-# CKPT_LOAD_PATH: llama2 model megatron checkpoint load path
-# TOKENIZER_PATH: llama2 model tokenizer path
-# MICRO_BATCH_SIZE: micro batch size
-# GLOBAL_BATCH_SIZE: global batch size
+# MODEL_NAME: llama model name
+# SRC_PATH: pretrain code path
+# MODEL_BASE_PATH: huggingface format model weights dir
+# DATA_PATH: preprocess dataset path for finetuning
+# TOKENIZER_PATH: llama model tokenizer path
+# CKPT_LOAD_PATH: llama model megatron checkpoint load path
 
 export OMP_NUM_THREADS=1
 export CUDA_DEVICE_MAX_CONNECTIONS=1
@@ -33,36 +33,40 @@ TP=8
 PP=2
 DP=$((${GPU_NUM}/${TP}/${PP}))
 
-# Network size variables
-MODEL_SIZE=7
+# Network name variables
+MODEL_NAME=llama3-8B
 
-if   [[ ${MODEL_SIZE} == 7 ]];   then HIDDEN_SIZE=4096;  NUM_HEAD=32; NUM_QUERY_GROUP=32; NUM_LAYERS=32; FFN_HIDDEN_SIZE=11008; NORM_EPS=1e-5;
-elif [[ ${MODEL_SIZE} == 13 ]];  then HIDDEN_SIZE=5120;  NUM_HEAD=40; NUM_QUERY_GROUP=40; NUM_LAYERS=40; FFN_HIDDEN_SIZE=13824; NORM_EPS=1e-5;
-elif [[ ${MODEL_SIZE} == 70 ]];  then HIDDEN_SIZE=8192;  NUM_HEAD=64; NUM_QUERY_GROUP=8;  NUM_LAYERS=80; FFN_HIDDEN_SIZE=28672; NORM_EPS=1e-5;
-elif [[ ${MODEL_SIZE} == "tiny" ]]; then HIDDEN_SIZE=128;  NUM_HEAD=4; NUM_QUERY_GROUP=4; NUM_LAYERS=4; FFN_HIDDEN_SIZE=512; NORM_EPS=1e-5;
-else echo "invalid MODEL_SIZE: ${MODEL_SIZE}"; exit 1
+if   [[ ${MODEL_NAME} == llama2-7B ]]; then 
+       HIDDEN_SIZE=4096;  NUM_HEAD=32; NUM_QUERY_GROUP=32; NUM_LAYERS=32; FFN_HIDDEN_SIZE=11008; NORM_EPS=1e-5; ROTARY_BASE=10000; MAKE_VOCAB_SIZE_DIVISBLE_BY=1; TOKENIZER_TYPE=Llama2Tokenizer;
+elif [[ ${MODEL_NAME} == llama2-13B ]]; then
+       HIDDEN_SIZE=5120;  NUM_HEAD=40; NUM_QUERY_GROUP=40; NUM_LAYERS=40; FFN_HIDDEN_SIZE=13824; NORM_EPS=1e-5; ROTARY_BASE=10000; MAKE_VOCAB_SIZE_DIVISBLE_BY=1; TOKENIZER_TYPE=Llama2Tokenizer;
+elif [[ ${MODEL_NAME} == llama2-70B ]]; then
+       HIDDEN_SIZE=8192;  NUM_HEAD=64; NUM_QUERY_GROUP=8;  NUM_LAYERS=80; FFN_HIDDEN_SIZE=28672; NORM_EPS=1e-5; ROTARY_BASE=10000; MAKE_VOCAB_SIZE_DIVISBLE_BY=1; TOKENIZER_TYPE=Llama2Tokenizer;
+elif [[ ${MODEL_NAME} == llama3-8B ]]; then 
+       HIDDEN_SIZE=4096;  NUM_HEAD=32; NUM_QUERY_GROUP=8;  NUM_LAYERS=32; FFN_HIDDEN_SIZE=14336; NORM_EPS=1e-5; ROTARY_BASE=500000; MAKE_VOCAB_SIZE_DIVISBLE_BY=16128; TOKENIZER_TYPE=Llama3Tokenizer;
+elif [[ ${MODEL_NAME} == llama3-70B ]]; then
+       HIDDEN_SIZE=8192;  NUM_HEAD=64; NUM_QUERY_GROUP=8;  NUM_LAYERS=80; FFN_HIDDEN_SIZE=28672; NORM_EPS=1e-5; ROTARY_BASE=500000; MAKE_VOCAB_SIZE_DIVISBLE_BY=16128; TOKENIZER_TYPE=Llama3Tokenizer;
+elif [[ ${MODEL_NAME} == llama2-tiny ]]; then
+       HIDDEN_SIZE=128;  NUM_HEAD=4; NUM_QUERY_GROUP=4; NUM_LAYERS=4; FFN_HIDDEN_SIZE=512; NORM_EPS=1e-5; ROTARY_BASE=10000; MAKE_VOCAB_SIZE_DIVISBLE_BY=1; TOKENIZER_TYPE=Llama2Tokenizer;
+else echo "invalid MODEL_NAME: ${MODEL_NAME}"; exit 1
 fi
 
 # base path
-BASE_PATH=/workspace
-RESULT_SAVE_PATH=/workspace/megatron_train_result
 SRC_PATH=/workspace/megatron/pretrain_gpt.py
+MODEL_BASE_PATH=/workspace/model_weights/llama3-8b
+DATA_PATH=/workspace/dataset/finetune_dataset/llama3-8b/alpaca_text_document
+TOKENIZER_PATH=${MODEL_BASE_PATH}/original/tokenizer.model
 
 # log dir & log save paths
-LOG_NAME=llama2-${MODEL_SIZE}b_pretrain_WS${WORLD_SIZE}_TP${TP}_PP${PP}
+RESULT_SAVE_PATH=/workspace/megatron_train_result
+LOG_NAME=${MODEL_NAME}_pretrain_WS${WORLD_SIZE}_TP${TP}_PP${PP}
 LOG_PATH=${RESULT_SAVE_PATH}/log/${LOG_NAME}/node${NODE_RANK}.log
 mkdir -p ${RESULT_SAVE_PATH}/log/${LOG_NAME}
 
-# dataset path
-DATA_PATH=${BASE_PATH}/dataset/finetune_dataset/llama2-7b-hf/alpaca_text_document
-
 # ckpt load path & save path
-CKPT_LOAD_PATH=${BASE_PATH}/model_weights/llama2-7b-hf-tp${TP}-pp${PP}
+CKPT_LOAD_PATH=${MODEL_BASE_PATH}-tp${TP}-pp${PP}
 CKPT_SAVE_PATH=${RESULT_SAVE_PATH}/ckpt/${LOG_NAME}
 mkdir -p ${RESULT_SAVE_PATH}/ckpt/
-
-# tokenizer path
-TOKENIZER_PATH=${BASE_PATH}/model_weights/llama2-7b-hf/tokenizer.model
 
 # training args
 TRAIN_ITERS=200
@@ -74,9 +78,9 @@ GLOBAL_BATCH_SIZE=256
 DROP_OUT=0.0
 MAX_LR=1.25e-6
 MIN_LR=1.25e-7
-MAX_SEQ_LEN=4096
-MAX_POSITION_EMBEDDINGS=4096
-INITIAL_LOSS_SCALE=65536
+MAX_SEQ_LEN=8192
+MAX_POSITION_EMBEDDINGS=8192
+INITIAL_LOSS_SCALE=4096
 MIXED_PRECISION_ARGS=--bf16
 
 # Set training command
@@ -106,8 +110,10 @@ NETWORK_SIZE_ARGS=" \
        --num-query-groups ${NUM_QUERY_GROUP} \
        --ffn-hidden-size ${FFN_HIDDEN_SIZE} \
        --position-embedding-type rope \
+       --use-rotary-position-embeddings \
+       --rotary-base ${ROTARY_BASE} \
        --max-position-embeddings ${MAX_POSITION_EMBEDDINGS} \
-       --make-vocab-size-divisible-by 1 \
+       --make-vocab-size-divisible-by ${MAKE_VOCAB_SIZE_DIVISBLE_BY} \
        --norm-epsilon ${NORM_EPS} \
        --normalization RMSNorm \
        --swiglu \
@@ -161,7 +167,7 @@ LEARNING_RATE_ARGS=" \
 
 CHECKPOINTING_ARGS=" \
        --load ${CKPT_LOAD_PATH} \
-       --finetune \       
+       --finetune \
        --no-load-optim \
        --no-load-rng \
        --save ${CKPT_SAVE_PATH} \
@@ -182,7 +188,7 @@ DATA_ARGS=" \
        --split 949,50,1 \
        --seq-length ${MAX_SEQ_LEN} \
        --num-workers 0 \
-       --tokenizer-type Llama2Tokenizer \
+       --tokenizer-type ${TOKENIZER_TYPE} \
        --tokenizer-model ${TOKENIZER_PATH} \
        "
  
